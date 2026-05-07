@@ -4,7 +4,8 @@ const RULES = {
   minVotes: 3,
   clusterSec: 6,
   minJumpSec: 10,
-  maxJumpSec: 300
+  maxJumpSec: 300,
+  startDelaySec: 5
 };
 
 const AD_WORDS = ["广告", "广子", "恰饭", "商单", "赞助", "推广", "口播", "植入", "ad", "sponsor"];
@@ -83,9 +84,11 @@ function findCandidate(lines, duration) {
 
   const target = Math.round(average(best, "target"));
   const starts = best.map((vote) => vote.lineTime).sort((a, b) => a - b);
-  const start = Math.max(0, Math.floor(starts[Math.floor(starts.length / 4)] || 0));
+  const rawStart = Math.max(0, Math.floor(starts[Math.floor(starts.length / 4)] || 0));
+  const start = Math.min(rawStart + RULES.startDelaySec, Math.max(0, target - RULES.minJumpSec));
   return {
     start,
+    rawStart,
     target,
     votes: best.length,
     evidence: [...new Set(best.map((vote) => vote.text))].slice(0, 3)
