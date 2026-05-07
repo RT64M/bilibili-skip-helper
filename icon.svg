@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Bilibili Skip Helper">
+  <rect width="128" height="128" rx="24" fill="#111827"/>
+  <path fill="#fb7185" d="M24 32h80v64H24z"/>
+  <path fill="#fff" d="M43 38l30 26-30 26V38Zm34 0h10v52H77V38Z"/>
+</svg>

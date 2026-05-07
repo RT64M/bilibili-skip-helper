@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Bilibili Skip Helper",
+  "short_name": "Skip Helper",
+  "description": "基于 B 站弹幕的时间线索，自动识别并跳过 UP 主恰饭片段。",
+  "version": "0.2.3",
+  "icons": {
+    "16": "icon.svg",
+    "48": "icon.svg",
+    "128": "icon.svg"
+  },
+  "host_permissions": [
+    "https://api.bilibili.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "js": [
+        "content.js"
+      ],
+      "matches": [
+        "https://www.bilibili.com/video/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
