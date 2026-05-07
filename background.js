@@ -64,11 +64,13 @@ function findCandidate(lines, duration) {
   for (const line of lines) {
     const text = compact(line.text);
     if (!text || hasAny(text, NEGATIVE_WORDS)) continue;
-    if (!hasAny(text, JUMP_WORDS) || !(hasAny(text, AD_WORDS) || hasAny(text, END_WORDS) || extractTimes(text).length > 0)) {
-      continue;
-    }
+    const times = extractTimes(text);
+    const hasJumpSignal = hasAny(text, JUMP_WORDS);
+    const hasAdSignal = hasAny(text, AD_WORDS);
+    const hasEndSignal = hasAny(text, END_WORDS);
+    if (!times.length || !(hasJumpSignal || hasAdSignal || hasEndSignal)) continue;
 
-    for (const target of extractTimes(text)) {
+    for (const target of times) {
       const jump = target - line.time;
       if (jump < RULES.minJumpSec || jump > RULES.maxJumpSec) continue;
       if (duration && target > duration + 2) continue;
