@@ -8,6 +8,7 @@ const POST_AD_REWATCH_GRACE_SEC = 20;
 let state = {};
 let scanTimer;
 let lastHref = location.href;
+let debugEnabled = isDebugEnabled();
 
 install();
 
@@ -22,6 +23,7 @@ function install() {
 function checkRoute() {
   if (lastHref === location.href) return;
   lastHref = location.href;
+  debugEnabled = isDebugEnabled();
   reset();
   scheduleScan();
 }
@@ -44,11 +46,12 @@ function scan() {
   video.addEventListener("seeking", onSeeking, { passive: true });
   video.addEventListener("seeked", onSeeked, { passive: true });
 
-  chrome.runtime.sendMessage({ type: MESSAGE_TYPE, bvid, duration: video.duration }, (response) => {
+  chrome.runtime.sendMessage({ type: MESSAGE_TYPE, bvid, duration: video.duration, debug: debugEnabled }, (response) => {
     if (state.key !== key) return;
     if (chrome.runtime.lastError) return console.debug("[skip-helper]", chrome.runtime.lastError.message);
     if (!response?.ok) return console.debug("[skip-helper]", response?.error);
     state.candidate = response.data?.candidate;
+    if (debugEnabled) logDebug(response.data);
     showDetectionResult(state.candidate);
     handleInAdEntry(true);
   });
@@ -251,6 +254,34 @@ function button(label, primary, onClick) {
 
 function getBvid() {
   return /\/video\/(BV[a-zA-Z0-9]+)/.exec(location.href)?.[1];
+}
+
+function isDebugEnabled() {
+  try {
+    return new URL(location.href).searchParams.get("bsh_debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function logDebug(data) {
+  const debug = data?.debug;
+  if (!debug) return;
+  console.groupCollapsed(`[skip-helper] ${debug.bvid} danmaku diagnostics`);
+  console.info({
+    cid: debug.cid,
+    duration: debug.duration,
+    xmlLength: debug.xmlLength,
+    totalLines: debug.totalLines,
+    timeCodedLines: debug.timeCodedLines,
+    signalLines: debug.signalLines,
+    negativeLines: debug.negativeLines,
+    acceptedVotes: debug.acceptedVotes,
+    candidate: data.candidate || null,
+    rejected: debug.rejected
+  });
+  if (debug.clusters?.length) console.table(debug.clusters);
+  console.groupEnd();
 }
 
 function formatTime(value) {

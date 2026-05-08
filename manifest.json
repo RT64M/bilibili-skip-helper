@@ -3,7 +3,7 @@
   "name": "Bilibili Skip Helper",
   "short_name": "Skip Helper",
   "description": "基于 B 站弹幕的时间线索，自动识别并跳过 UP 主恰饭片段。",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "icons": {
     "16": "icon.svg",
     "48": "icon.svg",

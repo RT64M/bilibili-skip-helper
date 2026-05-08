@@ -16,13 +16,13 @@ const NEGATIVE_WORDS = ["别跳", "不要跳", "不用跳", "没广告", "不是
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== MESSAGE_TYPE) return false;
   if (sender.id !== chrome.runtime.id) return false;
-  analyzeVideo(message.bvid, message.duration)
+  analyzeVideo(message.bvid, message.duration, message.debug === true)
     .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
   return true;
 });
 
-async function analyzeVideo(bvid, pageDuration) {
+async function analyzeVideo(bvid, pageDuration, debug = false) {
   const id = String(bvid);
   if (id.length > 32 || !/^BV[a-zA-Z0-9]+$/.test(id)) return {};
 
@@ -33,7 +33,12 @@ async function analyzeVideo(bvid, pageDuration) {
   if (!cid) return {};
 
   const xml = await getText(`${API_BASE}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`);
-  return { candidate: findCandidate(parseDanmaku(xml), duration) };
+  const lines = parseDanmaku(xml);
+  const analysis = findCandidate(lines, duration, debug);
+  return {
+    candidate: analysis.candidate,
+    ...(debug ? { debug: { bvid: id, cid, duration, xmlLength: xml.length, ...analysis.debug } } : {})
+  };
 }
 
 async function getJson(url) {
@@ -61,41 +66,93 @@ function parseDanmaku(xml) {
   return lines;
 }
 
-function findCandidate(lines, duration) {
+function findCandidate(lines, duration, debug = false) {
   const votes = [];
+  const debugInfo = debug ? {
+    totalLines: lines.length,
+    timeCodedLines: 0,
+    signalLines: 0,
+    negativeLines: 0,
+    acceptedVotes: 0,
+    rejected: {
+      noTime: 0,
+      noSignal: 0,
+      jumpTooShort: 0,
+      jumpTooLong: 0,
+      beyondDuration: 0
+    },
+    clusters: []
+  } : undefined;
+
   for (const line of lines) {
     const text = compact(line.text);
-    if (!text || hasAny(text, NEGATIVE_WORDS)) continue;
+    if (!text) continue;
+    if (hasAny(text, NEGATIVE_WORDS)) {
+      if (debugInfo) debugInfo.negativeLines += 1;
+      continue;
+    }
     const times = extractTimes(text);
     const hasJumpSignal = hasAny(text, JUMP_WORDS);
     const hasAdSignal = hasAny(text, AD_WORDS);
     const hasEndSignal = hasAny(text, END_WORDS);
-    if (!times.length || !(hasJumpSignal || hasAdSignal || hasEndSignal)) continue;
+    if (debugInfo && times.length) debugInfo.timeCodedLines += 1;
+    if (debugInfo && (hasJumpSignal || hasAdSignal || hasEndSignal)) debugInfo.signalLines += 1;
+    if (!times.length) {
+      if (debugInfo) debugInfo.rejected.noTime += 1;
+      continue;
+    }
+    if (!(hasJumpSignal || hasAdSignal || hasEndSignal)) {
+      if (debugInfo) debugInfo.rejected.noSignal += 1;
+      continue;
+    }
 
     for (const target of times) {
       const jump = target - line.time;
-      if (jump < RULES.minJumpSec || jump > RULES.maxJumpSec) continue;
-      if (duration && target > duration + 2) continue;
+      if (jump < RULES.minJumpSec) {
+        if (debugInfo) debugInfo.rejected.jumpTooShort += 1;
+        continue;
+      }
+      if (jump > RULES.maxJumpSec) {
+        if (debugInfo) debugInfo.rejected.jumpTooLong += 1;
+        continue;
+      }
+      if (duration && target > duration + 2) {
+        if (debugInfo) debugInfo.rejected.beyondDuration += 1;
+        continue;
+      }
+      if (debugInfo) debugInfo.acceptedVotes += 1;
       votes.push({ target, lineTime: line.time, text: line.text });
     }
   }
 
   const clusters = clusterVotes(votes);
+  if (debugInfo) {
+    debugInfo.clusters = clusters.map((cluster) => ({
+      target: Math.round(average(cluster, "target")),
+      votes: cluster.length,
+      lineStart: Math.floor(Math.min(...cluster.map((vote) => vote.lineTime))),
+      lineEnd: Math.floor(Math.max(...cluster.map((vote) => vote.lineTime))),
+      evidence: [...new Set(cluster.map((vote) => vote.text))].slice(0, 3)
+    }));
+  }
   const best = clusters
     .filter((cluster) => cluster.length >= RULES.minVotes)
     .sort((a, b) => b.length - a.length || average(a, "target") - average(b, "target"))[0];
-  if (!best) return undefined;
+  if (!best) return { candidate: undefined, debug: debugInfo };
 
   const target = Math.round(average(best, "target"));
   const starts = best.map((vote) => vote.lineTime).sort((a, b) => a - b);
   const rawStart = Math.max(0, Math.floor(starts[Math.floor(starts.length / 4)] || 0));
   const start = Math.min(rawStart + RULES.startDelaySec, Math.max(0, target - RULES.minJumpSec));
   return {
+    candidate: {
     start,
     rawStart,
     target,
     votes: best.length,
     evidence: [...new Set(best.map((vote) => vote.text))].slice(0, 3)
+    },
+    debug: debugInfo
   };
 }
 
