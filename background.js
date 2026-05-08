@@ -13,8 +13,9 @@ const JUMP_WORDS = ["空降", "指路", "省流", "跳到", "跳转", "跳过", 
 const END_WORDS = ["结束", "完了", "正片", "回来", "回归", "感谢空降", "谢谢空降", "感谢指路", "谢谢指路"];
 const NEGATIVE_WORDS = ["别跳", "不要跳", "不用跳", "没广告", "不是广告", "别空降", "不要空降"];
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== MESSAGE_TYPE) return false;
+  if (sender.id !== chrome.runtime.id) return false;
   analyzeVideo(message.bvid, message.duration)
     .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
@@ -22,9 +23,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 async function analyzeVideo(bvid, pageDuration) {
-  if (!/^BV[a-zA-Z0-9]+$/.test(String(bvid))) return {};
+  const id = String(bvid);
+  if (id.length > 32 || !/^BV[a-zA-Z0-9]+$/.test(id)) return {};
 
-  const info = await getJson(`${API_BASE}/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`);
+  const info = await getJson(`${API_BASE}/x/web-interface/view?bvid=${encodeURIComponent(id)}`);
   const video = info.data || {};
   const cid = video.cid || (video.pages || []).find((page) => page.cid)?.cid;
   const duration = finite(pageDuration) || finite(video.duration) || 0;
@@ -146,8 +148,17 @@ function decodeXml(text) {
     if (code === "gt") return ">";
     if (code === "quot") return '"';
     if (code === "apos") return "'";
-    if (code.startsWith("#x")) return String.fromCodePoint(Number.parseInt(code.slice(2), 16));
-    if (code.startsWith("#")) return String.fromCodePoint(Number.parseInt(code.slice(1), 10));
-    return entity;
+    const value = code.startsWith("#x")
+      ? Number.parseInt(code.slice(2), 16)
+      : code.startsWith("#")
+        ? Number.parseInt(code.slice(1), 10)
+        : NaN;
+    if (!Number.isInteger(value) || value < 0 || value > 0x10ffff) return entity;
+    if (value >= 0xd800 && value <= 0xdfff) return entity;
+    try {
+      return String.fromCodePoint(value);
+    } catch {
+      return entity;
+    }
   });
 }

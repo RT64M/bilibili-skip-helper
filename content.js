@@ -166,9 +166,9 @@ function showInAdPrompt(candidate) {
     if (remaining > 0) updateText();
   }, 1000);
   state.autoJumpTimer = setTimeout(() => {
-    if (state.candidate === candidate && !state.dismissed && !state.skipped && isInAdSegment(state.video.currentTime, candidate)) {
-      skip(candidate);
-    }
+    if (state.candidate !== candidate || state.dismissed || state.skipped || !state.video) return;
+    if (!isInAdSegment(state.video.currentTime, candidate)) return;
+    skip(candidate);
   }, IN_AD_AUTO_JUMP_SEC * 1000);
 }
 
@@ -182,6 +182,8 @@ function skip(candidate) {
 }
 
 function showUndo(previous) {
+  const skippedKey = state.key;
+  const video = state.video;
   const box = toast();
   const text = document.createElement("div");
   text.className = "bsh-text";
@@ -189,7 +191,11 @@ function showUndo(previous) {
   const actions = document.createElement("div");
   actions.className = "bsh-actions";
   actions.append(button("撤回", true, () => {
-    state.video.currentTime = previous;
+    if (state.key !== skippedKey || !video) {
+      box.isConnected && box.remove();
+      return;
+    }
+    video.currentTime = previous;
     dismiss();
   }));
   box.append(text, actions);
