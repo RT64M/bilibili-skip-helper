@@ -21,13 +21,13 @@ const CHINESE_DIGITS = new Map([
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== MESSAGE_TYPE) return false;
   if (sender.id !== chrome.runtime.id) return false;
-  analyzeVideo(message.bvid, message.duration, message.debug === true)
+  analyzeVideo(message.bvid, message.duration, message.debug === true, message.visibleDanmaku)
     .then((data) => sendResponse({ ok: true, data }))
     .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
   return true;
 });
 
-async function analyzeVideo(bvid, pageDuration, debug = false) {
+async function analyzeVideo(bvid, pageDuration, debug = false, visibleDanmaku = []) {
   const id = String(bvid);
   if (id.length > 32 || !/^BV[a-zA-Z0-9]+$/.test(id)) return {};
 
@@ -38,11 +38,12 @@ async function analyzeVideo(bvid, pageDuration, debug = false) {
   if (!cid) return {};
 
   const xml = await getText(`${API_BASE}/x/v1/dm/list.so?oid=${encodeURIComponent(cid)}`);
-  const lines = parseDanmaku(xml);
+  const visibleLines = normalizeVisibleDanmaku(visibleDanmaku);
+  const lines = [...parseDanmaku(xml), ...visibleLines];
   const analysis = findCandidate(lines, duration, debug);
   return {
     candidate: analysis.candidate,
-    ...(debug ? { debug: { bvid: id, cid, duration, xmlLength: xml.length, ...analysis.debug } } : {})
+    ...(debug ? { debug: { bvid: id, cid, duration, xmlLength: xml.length, visibleLines: visibleLines.length, ...analysis.debug } } : {})
   };
 }
 
@@ -69,6 +70,16 @@ function parseDanmaku(xml) {
     if (Number.isFinite(time) && text) lines.push({ time, text });
   }
   return lines;
+}
+
+function normalizeVisibleDanmaku(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 100).flatMap((item) => {
+    const time = Number(item?.time);
+    const text = String(item?.text || "").trim();
+    if (!Number.isFinite(time) || time < 0 || !text || text.length > 80) return [];
+    return [{ time, text, source: "visible" }];
+  });
 }
 
 function findCandidate(lines, duration, debug = false) {
@@ -113,7 +124,8 @@ function findCandidate(lines, duration, debug = false) {
 
     for (const target of times) {
       const jump = target - line.time;
-      if (jump < RULES.minJumpSec) {
+      const minJumpSec = line.source === "visible" ? 1 : RULES.minJumpSec;
+      if (jump < minJumpSec) {
         if (debugInfo) debugInfo.rejected.jumpTooShort += 1;
         continue;
       }
@@ -126,7 +138,7 @@ function findCandidate(lines, duration, debug = false) {
         continue;
       }
       if (debugInfo) debugInfo.acceptedVotes += 1;
-      votes.push({ target, lineTime: line.time, text: line.text });
+      votes.push({ target, lineTime: line.time, text: line.text, source: line.source });
     }
   }
 
@@ -135,6 +147,7 @@ function findCandidate(lines, duration, debug = false) {
     debugInfo.clusters = clusters.map((cluster) => ({
       target: Math.round(average(cluster, "target")),
       votes: cluster.length,
+      visibleVotes: cluster.filter((vote) => vote.source === "visible").length,
       lineStart: Math.floor(Math.min(...cluster.map((vote) => vote.lineTime))),
       lineEnd: Math.floor(Math.max(...cluster.map((vote) => vote.lineTime))),
       evidence: [...new Set(cluster.map((vote) => vote.text))].slice(0, 3)
@@ -151,11 +164,11 @@ function findCandidate(lines, duration, debug = false) {
   const start = Math.min(rawStart + RULES.startDelaySec, Math.max(0, target - RULES.minJumpSec));
   return {
     candidate: {
-    start,
-    rawStart,
-    target,
-    votes: best.length,
-    evidence: [...new Set(best.map((vote) => vote.text))].slice(0, 3)
+      start,
+      rawStart,
+      target,
+      votes: best.length,
+      evidence: [...new Set(best.map((vote) => vote.text))].slice(0, 3)
     },
     debug: debugInfo
   };

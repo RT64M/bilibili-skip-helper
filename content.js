@@ -5,6 +5,8 @@ const PRE_AD_PROMPT_SEC = 2;
 const AUTO_JUMP_SEC = 5;
 const IN_AD_AUTO_JUMP_SEC = 3;
 const POST_AD_REWATCH_GRACE_SEC = 20;
+const VISIBLE_REANALYZE_MS = 1500;
+const VISIBLE_TIME_PATTERN = /(?:(?:\d{1,2}:)?[0-5]?\d:[0-5]\d|(?<!\d)\d{3,4}(?!\d)|[零〇○一壹二两贰三叁四肆五伍六陆七柒八捌九玖]{3,4})/u;
 let state = {};
 let scanTimer;
 let lastHref = location.href;
@@ -41,17 +43,44 @@ function scan() {
   const key = `${bvid}:${Math.floor(video.duration || 0)}`;
   if (state.key === key && state.video === video) return;
   reset();
-  state = { key, bvid, video, prompted: false, skipped: false, dismissed: false };
+  state = {
+    key,
+    bvid,
+    video,
+    prompted: false,
+    skipped: false,
+    dismissed: false,
+    visibleDanmaku: [],
+    visibleDanmakuNodeTexts: new WeakMap(),
+    analyzing: false,
+    lastAnalyzeAt: 0
+  };
   video.addEventListener("timeupdate", onTimeUpdate, { passive: true });
   video.addEventListener("seeking", onSeeking, { passive: true });
   video.addEventListener("seeked", onSeeked, { passive: true });
 
-  chrome.runtime.sendMessage({ type: MESSAGE_TYPE, bvid, duration: video.duration, debug: debugEnabled }, (response) => {
+  collectVisibleDanmaku();
+  requestAnalysis("initial");
+}
+
+function requestAnalysis(reason) {
+  if (!state.bvid || !state.video || state.analyzing) return;
+  state.analyzing = true;
+  state.lastAnalyzeAt = Date.now();
+  const key = state.key;
+  chrome.runtime.sendMessage({
+    type: MESSAGE_TYPE,
+    bvid: state.bvid,
+    duration: state.video.duration,
+    debug: debugEnabled,
+    visibleDanmaku: state.visibleDanmaku
+  }, (response) => {
+    state.analyzing = false;
     if (state.key !== key) return;
     if (chrome.runtime.lastError) return console.debug("[skip-helper]", chrome.runtime.lastError.message);
     if (!response?.ok) return console.debug("[skip-helper]", response?.error);
     state.candidate = response.data?.candidate;
-    if (debugEnabled) logDebug(response.data);
+    if (debugEnabled) logDebug(response.data, reason);
     showDetectionResult(state.candidate);
     handleInAdEntry(true);
   });
@@ -60,6 +89,10 @@ function scan() {
 function onTimeUpdate() {
   const { candidate, dismissed, prompted, skipped, video } = state;
   if (video) state.lastTime = video.currentTime;
+  const hasNewVisibleDanmaku = collectVisibleDanmaku();
+  if (!candidate && hasNewVisibleDanmaku && Date.now() - (state.lastAnalyzeAt || 0) >= VISIBLE_REANALYZE_MS) {
+    requestAnalysis("visible-danmaku");
+  }
   if (!candidate || dismissed || prompted || skipped || !video || state.autoSkipSuppressed) return;
   if (isInAdSegment(video.currentTime, candidate)) return handleInAdEntry(false);
 
@@ -256,6 +289,29 @@ function getBvid() {
   return /\/video\/(BV[a-zA-Z0-9]+)/.exec(location.href)?.[1];
 }
 
+function collectVisibleDanmaku() {
+  if (!state.video || !state.visibleDanmaku || !state.visibleDanmakuNodeTexts) return false;
+  let added = false;
+  const nodes = document.querySelectorAll('[class*="dm"], [class*="danmaku"], [class*="barrage"]');
+  for (const node of nodes) {
+    if (!(node instanceof HTMLElement) || node.children.length > 2 || !isVisible(node)) continue;
+    const text = (node.textContent || "").trim();
+    if (!text || text.length > 80 || !VISIBLE_TIME_PATTERN.test(text)) continue;
+    if (state.visibleDanmakuNodeTexts.get(node) === text) continue;
+    state.visibleDanmakuNodeTexts.set(node, text);
+    state.visibleDanmaku.push({ time: state.video.currentTime, text });
+    if (state.visibleDanmaku.length > 100) state.visibleDanmaku.shift();
+    added = true;
+  }
+  return added;
+}
+
+function isVisible(node) {
+  const rect = node.getBoundingClientRect();
+  const style = getComputedStyle(node);
+  return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && Number(style.opacity || 1) > 0;
+}
+
 function isDebugEnabled() {
   try {
     return new URL(location.href).searchParams.get("bsh_debug") === "1";
@@ -264,14 +320,15 @@ function isDebugEnabled() {
   }
 }
 
-function logDebug(data) {
+function logDebug(data, reason) {
   const debug = data?.debug;
   if (!debug) return;
-  console.groupCollapsed(`[skip-helper] ${debug.bvid} danmaku diagnostics`);
+  console.groupCollapsed(`[skip-helper] ${debug.bvid} danmaku diagnostics (${reason})`);
   console.info({
     cid: debug.cid,
     duration: debug.duration,
     xmlLength: debug.xmlLength,
+    visibleLines: debug.visibleLines,
     totalLines: debug.totalLines,
     timeCodedLines: debug.timeCodedLines,
     signalLines: debug.signalLines,
